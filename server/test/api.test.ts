@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeAll } from "bun:test";
-import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import { eq } from "drizzle-orm";
 import { app } from "../index";
 import db from "../src/db";
+import { runMigrations } from "../src/db/migrate";
+import { marketsTable, usersTable } from "../src/db/schema";
+import { hashPassword } from "../src/lib/auth";
 
 const BASE = "http://localhost";
 
@@ -10,10 +13,33 @@ let authToken: string;
 let userId: number;
 let marketId: number;
 let outcomeId: number;
+let adminToken: string;
+let secondUserToken: string;
+let secondUserId: number;
+let apiKey: string;
 
 beforeAll(async () => {
-  // Run migrations to create tables on the in-memory DB
-  await migrate(db, { migrationsFolder: "./drizzle" });
+  await runMigrations();
+
+  const passwordHash = await hashPassword("adminpass123");
+  await db.insert(usersTable).values({
+    username: "adminuser",
+    email: "admin@example.com",
+    passwordHash,
+    role: "admin",
+    balance: 1000,
+  });
+
+  const adminLoginResponse = await app.handle(
+    new Request(`${BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "admin@example.com", password: "adminpass123" }),
+    }),
+  );
+
+  const adminLoginData = await adminLoginResponse.json();
+  adminToken = adminLoginData.token;
 });
 
 describe("Auth", () => {
@@ -35,6 +61,8 @@ describe("Auth", () => {
     expect(data.id).toBeDefined();
     expect(data.username).toBe(username);
     expect(data.email).toBe(email);
+    expect(data.role).toBe("user");
+    expect(data.balance).toBe(1000);
     expect(data.token).toBeDefined();
 
     authToken = data.token;
@@ -79,6 +107,8 @@ describe("Auth", () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.id).toBe(userId);
+    expect(data.role).toBe("user");
+    expect(data.balance).toBe(1000);
     expect(data.token).toBeDefined();
   });
 
@@ -159,11 +189,12 @@ describe("Markets", () => {
 
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(Array.isArray(data)).toBe(true);
-    expect(data.length).toBeGreaterThan(0);
-    expect(data[0].id).toBeDefined();
-    expect(data[0].title).toBeDefined();
-    expect(data[0].outcomes).toBeDefined();
+    expect(Array.isArray(data.items)).toBe(true);
+    expect(data.pagination.page).toBe(1);
+    expect(data.items.length).toBeGreaterThan(0);
+    expect(data.items[0].id).toBeDefined();
+    expect(data.items[0].title).toBeDefined();
+    expect(data.items[0].outcomes).toBeDefined();
   });
 
   it("GET /api/markets/:id — returns market detail", async () => {
@@ -216,6 +247,7 @@ describe("Bets", () => {
     expect(data.marketId).toBe(marketId);
     expect(data.outcomeId).toBe(outcomeId);
     expect(data.amount).toBe(50);
+    expect(data.balance).toBe(950);
   });
 
   it("POST /api/markets/:id/bets — validates amount", async () => {
@@ -233,6 +265,211 @@ describe("Bets", () => {
     expect(res.status).toBe(400);
     const data = await res.json();
     expect(data.errors.length).toBeGreaterThan(0);
+  });
+
+  it("POST /api/markets/:id/bets — rejects bets larger than available balance", async () => {
+    const res = await app.handle(
+      new Request(`${BASE}/api/markets/${marketId}/bets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ outcomeId, amount: 5000 }),
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toBe("Insufficient balance");
+  });
+});
+
+describe("Admin market resolution", () => {
+  it("POST /api/auth/register — creates a second user for payout tests", async () => {
+    const res = await app.handle(
+      new Request(`${BASE}/api/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: "seconduser",
+          email: "second@example.com",
+          password: "testpass123",
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    secondUserId = data.id;
+    secondUserToken = data.token;
+  });
+
+  it("POST /api/markets/:id/resolve — requires admin", async () => {
+    const res = await app.handle(
+      new Request(`${BASE}/api/markets/${marketId}/resolve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ outcomeId }),
+      }),
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it("POST /api/markets/:id/resolve — resolves the market and pays winners", async () => {
+    const secondBetResponse = await app.handle(
+      new Request(`${BASE}/api/markets/${marketId}/bets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${secondUserToken}`,
+        },
+        body: JSON.stringify({ outcomeId, amount: 150 }),
+      }),
+    );
+
+    expect(secondBetResponse.status).toBe(201);
+
+    const res = await app.handle(
+      new Request(`${BASE}/api/markets/${marketId}/resolve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ outcomeId }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.status).toBe("resolved");
+    expect(data.winners).toBe(2);
+
+    const [updatedFirstUser, updatedSecondUser, updatedMarket] = await Promise.all([
+      db.query.usersTable.findFirst({ where: eq(usersTable.id, userId) }),
+      db.query.usersTable.findFirst({ where: eq(usersTable.id, secondUserId) }),
+      db.query.marketsTable.findFirst({ where: eq(marketsTable.id, marketId) }),
+    ]);
+
+    expect(updatedFirstUser?.balance).toBe(1000);
+    expect(updatedSecondUser?.balance).toBe(1000);
+    expect(updatedMarket?.status).toBe("resolved");
+    expect(updatedMarket?.resolvedOutcomeId).toBe(outcomeId);
+  });
+});
+
+describe("Profile and leaderboard", () => {
+  it("GET /api/users/me — returns paginated active and resolved bets", async () => {
+    const res = await app.handle(
+      new Request(`${BASE}/api/users/me?activePage=1&resolvedPage=1`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.user.id).toBe(userId);
+    expect(data.user.balance).toBe(1000);
+    expect(data.activeBets.pagination.page).toBe(1);
+    expect(data.resolvedBets.pagination.page).toBe(1);
+    expect(data.activeBets.items).toHaveLength(0);
+    expect(data.resolvedBets.items).toHaveLength(1);
+    expect(data.resolvedBets.items[0].didWin).toBe(true);
+    expect(data.resolvedBets.items[0].marketId).toBe(marketId);
+  });
+
+  it("GET /api/leaderboard — ranks users by winnings", async () => {
+    const res = await app.handle(new Request(`${BASE}/api/leaderboard?page=1`));
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(Array.isArray(data.items)).toBe(true);
+    expect(data.pagination.page).toBe(1);
+    expect(data.items.length).toBeGreaterThan(0);
+    if (data.items.length > 1) {
+      expect(data.items[0].totalWinnings).toBeGreaterThanOrEqual(data.items[1].totalWinnings);
+    }
+  });
+});
+
+describe("API keys", () => {
+  it("POST /api/users/me/api-key — generates an API key", async () => {
+    const res = await app.handle(
+      new Request(`${BASE}/api/users/me/api-key`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    expect(typeof data.apiKey).toBe("string");
+    expect(data.apiKey.startsWith("pm_")).toBe(true);
+    apiKey = data.apiKey;
+  });
+
+  it("POST /api/markets — accepts API key auth", async () => {
+    const res = await app.handle(
+      new Request(`${BASE}/api/markets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+        },
+        body: JSON.stringify({
+          title: "Will a bot market work?",
+          description: "Created with an API key",
+          outcomes: ["Yes", "No"],
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    expect(data.title).toBe("Will a bot market work?");
+  });
+
+  it("DELETE /api/users/me/api-key — revokes the API key", async () => {
+    const res = await app.handle(
+      new Request(`${BASE}/api/users/me/api-key`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+  });
+
+  it("POST /api/markets — rejects revoked API keys", async () => {
+    const res = await app.handle(
+      new Request(`${BASE}/api/markets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+        },
+        body: JSON.stringify({
+          title: "This should fail",
+          outcomes: ["Yes", "No"],
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(401);
   });
 });
 

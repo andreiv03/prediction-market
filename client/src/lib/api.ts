@@ -5,10 +5,17 @@ export interface Market {
   id: number;
   title: string;
   description?: string;
-  status: "active" | "resolved";
+  status: "active" | "resolved" | "archived";
+  createdAt: string;
   creator?: string;
   outcomes: MarketOutcome[];
   totalMarketBets: number;
+  participantCount: number;
+  resolvedOutcome?: {
+    id: number;
+    title: string;
+  } | null;
+  resolvedAt?: string | null;
 }
 
 export interface MarketOutcome {
@@ -23,6 +30,8 @@ export interface User {
   username: string;
   email: string;
   token: string;
+  role?: "user" | "admin";
+  balance?: number;
 }
 
 export interface Bet {
@@ -31,6 +40,69 @@ export interface Bet {
   marketId: number;
   outcomeId: number;
   amount: number;
+  createdAt: string;
+  balance?: number;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalItems: number;
+    totalPages: number;
+    hasPreviousPage: boolean;
+    hasNextPage: boolean;
+  };
+}
+
+export interface ProfileActiveBet {
+  betId: number;
+  marketId: number;
+  marketTitle: string;
+  outcomeId: number;
+  outcomeTitle: string;
+  amount: number;
+  currentOdds: number;
+  currentTotalBets: number;
+  createdAt: string;
+}
+
+export interface ProfileResolvedBet {
+  betId: number;
+  marketId: number;
+  marketTitle: string;
+  outcomeId: number;
+  outcomeTitle: string;
+  amount: number;
+  didWin: boolean;
+  winningOutcomeId: number | null;
+  winningOutcomeTitle: string | null;
+  createdAt: string;
+}
+
+export interface ProfileResponse {
+  user: {
+    id: number;
+    username: string;
+    email: string;
+    role: "user" | "admin";
+    balance: number;
+    hasApiKey: boolean;
+    apiKeyCreatedAt: string | null;
+  };
+  activeBets: PaginatedResponse<ProfileActiveBet>;
+  resolvedBets: PaginatedResponse<ProfileResolvedBet>;
+}
+
+export interface LeaderboardEntry {
+  userId: number;
+  username: string;
+  totalWinnings: number;
+}
+
+export interface ApiKeyResponse {
+  apiKey: string;
   createdAt: string;
 }
 
@@ -91,8 +163,12 @@ class ApiClient {
   }
 
   // Markets endpoints
-  async listMarkets(status: "active" | "resolved" = "active"): Promise<Market[]> {
-    return this.request(`/api/markets?status=${status}`);
+  async listMarkets(
+    status: "active" | "resolved" | "archived" = "active",
+    sortBy: "createdAt" | "totalBets" | "participants" = "createdAt",
+    page = 1,
+  ): Promise<PaginatedResponse<Market>> {
+    return this.request(`/api/markets?status=${status}&sortBy=${sortBy}&page=${page}`);
   }
 
   async getMarket(id: number): Promise<Market> {
@@ -111,6 +187,39 @@ class ApiClient {
     return this.request(`/api/markets/${marketId}/bets`, {
       method: "POST",
       body: JSON.stringify({ outcomeId, amount }),
+    });
+  }
+
+  async resolveMarket(marketId: number, outcomeId: number) {
+    return this.request(`/api/markets/${marketId}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ outcomeId }),
+    });
+  }
+
+  async archiveMarket(marketId: number) {
+    return this.request(`/api/markets/${marketId}/archive`, {
+      method: "POST",
+    });
+  }
+
+  async getProfile(activePage = 1, resolvedPage = 1): Promise<ProfileResponse> {
+    return this.request(`/api/users/me?activePage=${activePage}&resolvedPage=${resolvedPage}`);
+  }
+
+  async getLeaderboard(page = 1): Promise<PaginatedResponse<LeaderboardEntry>> {
+    return this.request(`/api/leaderboard?page=${page}`);
+  }
+
+  async generateApiKey(): Promise<ApiKeyResponse> {
+    return this.request("/api/users/me/api-key", {
+      method: "POST",
+    });
+  }
+
+  async revokeApiKey(): Promise<{ success: boolean }> {
+    return this.request("/api/users/me/api-key", {
+      method: "DELETE",
     });
   }
 }

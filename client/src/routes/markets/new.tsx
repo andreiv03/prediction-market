@@ -54,14 +54,22 @@ function CreateMarketPage() {
   });
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <div className="max-w-2xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8">
+      <div className="max-w-5xl mx-auto px-4 space-y-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900">Create a Market</h1>
+            <p className="mt-2 text-gray-600">Set up a new prediction market and define the outcomes.</p>
+          </div>
+          <Button className="w-full sm:w-auto" variant="outline" onClick={() => navigate({ to: "/" })}>
+            Back to Markets
+          </Button>
+        </div>
+
         <Card>
           <CardHeader className="space-y-2">
-            <CardTitle className="text-3xl">Create a Market</CardTitle>
-            <CardDescription>
-              Set up a new prediction market and define the outcomes
-            </CardDescription>
+            <CardTitle className="text-2xl">Market Details</CardTitle>
+            <CardDescription>Fill in the details below to publish a new market.</CardDescription>
           </CardHeader>
           <CardContent>
             <form
@@ -147,14 +155,14 @@ function CreateMarketPage() {
                 </div>
               )}
 
-              <div className="flex gap-4">
-                <Button type="submit" className="flex-1" disabled={isLoading}>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <Button type="submit" className="w-full sm:flex-1" disabled={isLoading}>
                   {isLoading ? "Creating..." : "Create Market"}
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  className="flex-1"
+                  className="w-full sm:flex-1"
                   onClick={() => navigate({ to: "/" })}
                   disabled={isLoading}
                 >

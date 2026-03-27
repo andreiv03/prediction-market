@@ -11,13 +11,14 @@ import { Label } from "@/components/ui/label";
 function MarketDetailPage() {
   const { id } = useParams({ from: "/markets/$id" });
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const [market, setMarket] = useState<Market | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedOutcomeId, setSelectedOutcomeId] = useState<number | null>(null);
   const [betAmount, setBetAmount] = useState("");
   const [isBetting, setIsBetting] = useState(false);
+  const [isResolving, setIsResolving] = useState(false);
 
   const marketId = parseInt(id, 10);
 
@@ -46,10 +47,16 @@ function MarketDetailPage() {
       return;
     }
 
+    const parsedAmount = parseFloat(betAmount);
+    if (Number.isNaN(parsedAmount) || parsedAmount <= 0) {
+      setError("Bet amount must be a positive number");
+      return;
+    }
+
     try {
       setIsBetting(true);
       setError(null);
-      await api.placeBet(marketId, selectedOutcomeId, parseFloat(betAmount));
+      await api.placeBet(marketId, selectedOutcomeId, parsedAmount);
       setBetAmount("");
       // Reload market to show updated odds
       const updated = await api.getMarket(marketId);
@@ -58,6 +65,39 @@ function MarketDetailPage() {
       setError(err instanceof Error ? err.message : "Failed to place bet");
     } finally {
       setIsBetting(false);
+    }
+  };
+
+  const handleResolveMarket = async () => {
+    if (!selectedOutcomeId) {
+      setError("Select the winning outcome first");
+      return;
+    }
+
+    try {
+      setIsResolving(true);
+      setError(null);
+      await api.resolveMarket(marketId, selectedOutcomeId);
+      const updated = await api.getMarket(marketId);
+      setMarket(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to resolve market");
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
+  const handleArchiveMarket = async () => {
+    try {
+      setIsResolving(true);
+      setError(null);
+      await api.archiveMarket(marketId);
+      const updated = await api.getMarket(marketId);
+      setMarket(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to archive market");
+    } finally {
+      setIsResolving(false);
     }
   };
 
@@ -99,15 +139,15 @@ function MarketDetailPage() {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8">
       <div className="max-w-3xl mx-auto px-4 space-y-6">
         {/* Header */}
-        <Button variant="outline" onClick={() => navigate({ to: "/" })}>
+        <Button className="w-full sm:w-auto" variant="outline" onClick={() => navigate({ to: "/" })}>
           ← Back
         </Button>
 
         <Card>
           <CardHeader>
-            <div className="flex items-start justify-between">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex-1">
-                <CardTitle className="text-4xl">{market.title}</CardTitle>
+                <CardTitle className="text-3xl sm:text-4xl">{market.title}</CardTitle>
                 {market.description && (
                   <CardDescription className="text-lg mt-2">{market.description}</CardDescription>
                 )}
@@ -126,7 +166,7 @@ function MarketDetailPage() {
 
             {/* Outcomes Display */}
             <div className="space-y-3">
-              <h3 className="text-lg font-semibold">Outcomes</h3>
+              <h3 className="text-lg font-semibold">Outcome Breakdown</h3>
               {market.outcomes.map((outcome) => (
                 <div
                   key={outcome.id}
@@ -137,14 +177,20 @@ function MarketDetailPage() {
                   }`}
                   onClick={() => market.status === "active" && setSelectedOutcomeId(outcome.id)}
                 >
-                  <div className="flex justify-between items-center">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex-1">
                       <h4 className="font-semibold">{outcome.title}</h4>
                       <p className="text-sm text-muted-foreground mt-1">
                         Total bets: ${outcome.totalBets.toFixed(2)}
                       </p>
+                      <div className="mt-3 h-2 rounded-full bg-secondary/60 overflow-hidden">
+                        <div
+                          className="h-full bg-primary transition-all"
+                          style={{ width: `${outcome.odds}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-left sm:text-right">
                       <p className="text-3xl font-bold text-primary">{outcome.odds}%</p>
                       <p className="text-xs text-muted-foreground">odds</p>
                     </div>
@@ -155,10 +201,18 @@ function MarketDetailPage() {
 
             {/* Market Stats */}
             <div className="rounded-lg p-6 border border-primary/20 bg-primary/5">
-              <p className="text-sm text-muted-foreground mb-1">Total Market Value</p>
-              <p className="text-4xl font-bold text-primary">
-                ${market.totalMarketBets.toFixed(2)}
-              </p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <p className="text-sm text-muted-foreground mb-1">Total Market Value</p>
+                  <p className="text-4xl font-bold text-primary">
+                    ${market.totalMarketBets.toFixed(2)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground mb-1">Participants</p>
+                  <p className="text-4xl font-bold text-primary">{market.participantCount}</p>
+                </div>
+              </div>
             </div>
 
             {/* Betting Section */}
@@ -201,10 +255,53 @@ function MarketDetailPage() {
               </Card>
             )}
 
+            {user?.role === "admin" && market.status === "active" && (
+              <Card className="border-amber-300 bg-amber-50/80">
+                <CardHeader>
+                  <CardTitle>Admin Controls</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    Resolve the market with the selected winning outcome, or archive it and refund all bets.
+                  </p>
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <Button
+                      className="w-full sm:w-auto"
+                      onClick={handleResolveMarket}
+                      disabled={isResolving || !selectedOutcomeId}
+                    >
+                      {isResolving ? "Processing..." : "Resolve Market"}
+                    </Button>
+                    <Button
+                      className="w-full font-semibold sm:w-auto"
+                      variant="destructive"
+                      onClick={handleArchiveMarket}
+                      disabled={isResolving}
+                    >
+                      Archive and Refund
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {market.status === "resolved" && (
               <Card>
                 <CardContent className="py-6">
-                  <p className="text-muted-foreground">This market has been resolved.</p>
+                  <p className="text-muted-foreground">
+                    This market has been resolved.
+                    {market.resolvedOutcome ? ` Winner: ${market.resolvedOutcome.title}.` : ""}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
+            {market.status === "archived" && (
+              <Card>
+                <CardContent className="py-6">
+                  <p className="text-muted-foreground">
+                    This market was archived and all bettors were refunded.
+                  </p>
                 </CardContent>
               </Card>
             )}

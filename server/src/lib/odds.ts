@@ -46,3 +46,31 @@ export function calculateTotalWinnings(
     return total + Number((bet.amount * multiplier).toFixed(2));
   }, 0);
 }
+
+/**
+ * Split the total market pool proportionally across winning bets.
+ */
+export function calculatePayouts(
+  winningBets: Array<{
+    id: number;
+    userId: number;
+    amount: number;
+  }>,
+  totalMarketBets: number,
+): Array<{
+  betId: number;
+  userId: number;
+  payout: number;
+}> {
+  const winningPool = winningBets.reduce((sum, bet) => sum + bet.amount, 0);
+
+  if (winningPool <= 0 || totalMarketBets <= 0) {
+    return [];
+  }
+
+  return winningBets.map((bet) => ({
+    betId: bet.id,
+    userId: bet.userId,
+    payout: Number(((bet.amount / winningPool) * totalMarketBets).toFixed(2)),
+  }));
+}

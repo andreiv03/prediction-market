@@ -1,10 +1,8 @@
 import {
-  int,
   sqliteTable,
   text,
   real,
   integer,
-  primaryKey,
   uniqueIndex,
   index,
 } from "drizzle-orm/sqlite-core";
@@ -18,6 +16,10 @@ export const usersTable = sqliteTable(
     username: text("username").notNull().unique(),
     email: text("email").notNull().unique(),
     passwordHash: text("password_hash").notNull(),
+    role: text("role", { enum: ["user", "admin"] }).notNull().default("user"),
+    balance: real("balance").notNull().default(1000),
+    apiKeyHash: text("api_key_hash"),
+    apiKeyCreatedAt: integer("api_key_created_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -38,7 +40,7 @@ export const marketsTable = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     title: text("title").notNull(),
     description: text("description"),
-    status: text("status", { enum: ["active", "resolved"] })
+    status: text("status", { enum: ["active", "resolved", "archived"] })
       .notNull()
       .default("active"),
     createdBy: integer("created_by")
@@ -48,6 +50,7 @@ export const marketsTable = sqliteTable(
       .notNull()
       .$defaultFn(() => new Date()),
     resolvedOutcomeId: integer("resolved_outcome_id"),
+    resolvedAt: integer("resolved_at", { mode: "timestamp" }),
   },
   (table) => ({
     createdByIdx: index("markets_created_by_idx").on(table.createdBy),
